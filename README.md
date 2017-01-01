@@ -1,7 +1,7 @@
 # KaggleHousingData
 
 - This repository was an independent project that used the dataset from Kaggle which included house selling prices and characteristics for the King Country area in Seattle, Washington
-- The project followed three stages:
+- The project included three stages:
 
 1. A database was created in MySQL workbench after the dataset was normalized to third normalized form. The entity relationship diagram is included in the projecty
 

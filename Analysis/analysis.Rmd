@@ -1,0 +1,292 @@
+---
+title: "December 8, 2016"
+author: "Gordon Dri"
+date: '2016-12-07'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+PART A: MySQL Connection with R 
+
+Install the package to access SQL through R 
+```{r 1}
+#install.packages("RMySQL")
+library(RMySQL)
+```
+
+Set up the connection
+```{r, echo=FALSE}
+connection = dbConnect(MySQL(),user="root", password="T6IRde3R", 
+                dbname="houseDB", host="localhost")
+```
+
+Sample query for the MySQL database:
+```{r 2}
+myQuery <- "SELECT * FROM KingCountyHouseInformation LIMIT 20;"
+dbGetQuery(connection, myQuery)
+```
+
+Get a list of all properties that sold for more than 1,000,000
+```{r 3}
+myQuery <- "
+SELECT 
+  Transaction_ID, Date, Price 
+FROM 
+  KingCountyHouseInformation
+WHERE
+  Price > 1000000
+LIMIT 20;"
+
+dbGetQuery(connection, myQuery)
+```
+
+Get a list of all properties that sold in zipcode 98001
+```{r 4}
+myQuery <- "
+SELECT 
+  a.Zipcode, 
+  main.Transaction_ID, 
+  main.Date, 
+  main.Price
+FROM 
+  KingCountyHouseInformation AS main
+    INNER JOIN
+  Address as a ON a.Address_ID = main.Address_ID
+WHERE
+  a.Zipcode = '98001'
+LIMIT 20;
+"
+dbGetQuery(connection, myQuery)
+```
+
+Calculate the average home price per zipcode and look at some characteristics
+```{r 5}
+myQuery <- "
+SELECT 
+  a.zipcode,
+  AVG(main.price) AS AvgPriceSold,
+  AVG(main.Sqft_Lot) AS AvgSqFtLot,
+  AVG(main.Waterfront_ID), 
+  AVG(main.View_ID),
+  AVG(main.Condition_ID)
+FROM
+  KingCountyHouseInformation AS main
+  INNER JOIN
+Address as a ON a.Address_ID = main.Address_ID
+GROUP BY 
+  a.zipcode
+LIMIT 20;
+"
+dbGetQuery(connection, myQuery)
+```
+
+Part B: Principle Component Analysis of the Input Variables 
+
+```{r}
+# save the main table from the database into a dataframe for analysis 
+myQuery <- "
+SELECT 
+  *
+FROM
+  KingCountyHouseInformation;
+"
+house.data <- as.data.frame(dbGetQuery(connection, myQuery))
+
+# remove columns that will not be feasible in a linear model (such as Waterfront_ID, yr.built, yr.renovated, address_id, latitude and longitude)
+colnames(house.data)
+unwanted.columns <- c('Waterfront_ID', 'Yr_Built', 'Yr_Renovated', 'Address_ID', 'Latitude', 
+                      'Longitude')
+unwanted.columns.ids <- match(unwanted.columns,names(house.data))
+house.data <- house.data[,-unwanted.columns.ids]
+
+# normalize each column of the dataset by computing the z scores 
+house.data.inputs.norm <- apply(house.data[,5:ncol(house.data)], 2, scale)
+house.data <- cbind(house.data[,1:4], house.data.inputs.norm)
+
+# summarize the numerical data in the dataframe
+summary(house.data[,4:ncol(house.data)])
+
+# run a simple linear model predicting price using the other variables as predictors 
+linMod <- lm(Price~.,data=house.data[,4:ncol(house.data)])
+summary(linMod)
+```
+Observations from the Linear Model Summary:
+- all but one non-intercept parameters are highly significant 
+- Multiple R-squared value of 0.5919 is higher than the adjusted R-squared value of 0.5916 which suggests the predictors in the model are all useful 
+- The F-statistic is significant with a very low p-value, meaning that at least one non-intercept parameter is non-zero (we must reject our null hypothesis)
+
+```{r}
+# explore the dimensionality of a set of three input variables at random 
+Combined.data.1.2.3<-house.data.inputs.norm[,c(2,3,4)]
+pairs(Combined.data.1.2.3)
+dim(house.data.inputs.norm)
+# we now have 11 predictors 
+```
+
+Manually perform Principle Component Analysis on the matrix of input predictors
+```{r}
+# STEP 1: create a centered matrix (redundant here given that we already normalized the data)
+centered.matrix <- house.data.inputs.norm
+col.means <- colMeans(house.data.inputs.norm)
+for (i in 1:ncol(house.data.inputs.norm)){
+  centered.matrix[,i] <- house.data.inputs.norm[,i] - col.means[i]
+}
+
+# STEP 2: calculate the covariance matrix 
+cov.matrix <- cov(centered.matrix); cov.matrix
+
+# STEP 3: perform eigenvalue decomposition of the covariance matrix 
+eigens <- eigen(cov.matrix)
+eigen.vecs <- eigens$vectors
+eigen.vals <- eigens$values
+
+# plot the normalized eigen values
+barplot(eigen.vals/sum(eigen.vals),width=2,col = "black", ylim = c(0, 1), names.arg = rep(1:11), xlab='Normalized Eigen Values')
+# each bar represents how much variance the principle component corresponding to this eigenvalue is capable of explaining 
+
+# Define the L matrix as having columns corresponding to the eigenvectors
+L.matrix <- eigen.vecs
+
+# plot the first 3 loadings
+matplot(L.matrix[,1:3],type="l",lty=1,col=c("black","red","green"),lwd=3,xlab='Predictors',ylab='Loadings')
+# the loadings represent the coefficients in the linear combination when projecting the data points onto a new axis (i.e factors)
+
+# Define the F matrix by multiplying the centered matrix by the L matrix
+F.matrix <- as.matrix(centered.matrix) %*% L.matrix
+
+# calculate and plot 3 selected factors
+matplot(F.matrix[,1:3],type="l",col=c("black","red","green"),lty=1,lwd=3, xlab='Transactions', ylab='Factors')
+# the factors represent the projected data points from the original dataset onto a new coordinate system
+
+# compare factors 
+plot(F.matrix[,1],F.matrix[,2],type="l",lwd=2)
+
+# analyze the adjustments that each factor makes to the curve (output variable). 
+# each of the factors makes an adjustment corresponding to the shape of its loading
+
+# choose two random rows that we would like to explain the difference through an estimation consisting of our approximation which is the F.matrix multipled by the transposed L.matrix
+# we will evaluate how many factors (i.e new coordinates/dimensions/principle components) needed to accurately explain the difference 
+OldCurve<-house.data.inputs.norm[16,]
+NewCurve<-house.data.inputs.norm[17,]
+CurveChange<-NewCurve-OldCurve
+FactorsChange<-F.matrix[17,]-F.matrix[16,]
+ModelCurveAdjustment.1Factor<-OldCurve+t(L.matrix[,1])*FactorsChange[1]
+ModelCurveAdjustment.2Factors<-OldCurve+t(L.matrix[,1])*FactorsChange[1]+t(L.matrix[,2])*FactorsChange[2]
+ModelCurveAdjustment.3Factors<-OldCurve+t(L.matrix[,1])*FactorsChange[1]+t(L.matrix[,2])*FactorsChange[2]+t(L.matrix[,3])*FactorsChange[3]
+
+# 1 factor adjustment
+matplot(t(rbind(OldCurve,NewCurve,ModelCurveAdjustment.1Factor)),type="l",col=c("black","red","green"),lwd=3,ylab="Curve Adjustment")
+legend(x="topleft",c("Old Curve","New Curve","1-Factor Adj."),lty=c(1,1,2),lwd=1,col=c("black","red","green"),cex = 0.75)
+
+# 2 factor adjustment
+matplot(t(rbind(OldCurve,NewCurve,ModelCurveAdjustment.1Factor,ModelCurveAdjustment.2Factors)),type="l",col=c("black","red","green","blue"),lwd=3,ylab="Curve Adjustment")
+legend(x="topleft",c("Old Curve","New Curve","1-Factor Adj.","2-Factor Adj."),lty=c(1,1,2),lwd=1,col=c("black","red","green","blue"),cex = 0.75)
+
+# 3 factor adjustment
+matplot(t(rbind(OldCurve,NewCurve,ModelCurveAdjustment.1Factor,ModelCurveAdjustment.2Factors,
+                ModelCurveAdjustment.3Factors)),type="l",col=c("black","red","green","blue","magenta"),lwd=3,ylab="Curve Adjustment")
+legend(x="topleft",c("Old Curve","New Curve","1-Factor Adj.","2-Factor Adj.","3-Factor Adj"),lty=c(1,1,2),lwd=1,col=c("black","red","green","blue"),cex = 0.75)
+
+# we definitely need more than 3 factors to explain this difference or predict the new curve 
+
+# check how well the curve change was estimated by 3 factors 
+rbind(CurveChange,ModelCurveAdjustment.3Factors-OldCurve)
+# our 3 factor adjustment is not a great estimation of the curve change 
+
+# estimate all the values for the 4th column (Floors) using three terms of factors and loadings 
+Floors<-col.means[3]+L.matrix[3,1]*F.matrix[,1]+L.matrix[3,2]*F.matrix[,2]+L.matrix[3,3]*F.matrix[,3]
+matplot(cbind(house.data.inputs.norm[,3],Floors),type="l",lty=1,lwd=c(3,1),col=c("black","red"),ylab="Floor Column")
+# this is a good estimate for the column 
+```
+
+Use the princomp function to perform Principle Component Analysis on the matrix of input predictors
+```{r}
+# run PCA on predictors
+dataPredictors.PCA <- princomp(house.data.inputs.norm)
+
+# explore the PCA object
+names(dataPredictors.PCA)
+
+# plot the principle components
+plot(dataPredictors.PCA)
+
+# look at the variance of the predictors explained by each priniciple component
+dataPredictors.PCA$sdev^2
+
+# plot the normalized variances explained by each component
+barplot(dataPredictors.PCA$sdev^2/sum(dataPredictors.PCA$sdev^2),ylim=c(0,0.6))
+# this is the same as plotting the eigenvalues above 
+
+# evaluate the cumulative variance explained by all components 
+cumsum(dataPredictors.PCA$sdev^2/sum(dataPredictors.PCA$sdev^2))
+# we must make a decision of how many components to use based on our desired r^2 value 
+
+# interpret factor loadings 
+dataPredictors.Loadings<-dataPredictors.PCA$loadings
+dataPredictors.Loadings[,1:5]
+# this is the same as eigenvectors above (illustrates the weights in which each original predictor will be used in the new characteristic)
+
+# compare the eigen vectors with the loadings obtained from PCA
+Project.Data.PCA.Eigen.Loadings <- cbind(eigen.vecs[,1:3], dataPredictors.PCA$loadings[,1:3])
+colnames(Project.Data.PCA.Eigen.Loadings) <- c('L1.eigen', 'L2.eigen', 'L3.eigen', 'L1.PCA', 'L2.PCA', 'L3.PCA')
+
+head(Project.Data.PCA.Eigen.Loadings)
+# we see they are the same 
+
+# plot loadings
+matplot(1:11,dataPredictors.PCA$loadings[,1:5],type="l",lty=1,lwd=2,xaxt="n",xlab="Predictor",ylab="Factor Loadings",col=c("black","red","blue","green","cyan"))
+axis(1, 1:11,labels=colnames(house.data.inputs.norm))
+legend("bottomleft",legend=c("L1","L2","L3","L4","L5"),lty=1,lwd=2,cex=.6,col=c("black","red","blue","green","cyan"))
+
+# create a new data frame with principal components as predictors
+dataPCAFactors<-dataPredictors.PCA$scores
+dataRotated<-as.data.frame(cbind(Output=house.data$Price,dataPCAFactors))
+
+# look at the factors (scores)
+matplot(dataPredictors.PCA$scores[,1:3],type="l",lty=1,lwd=2)
+
+# compare the F.matrix with the factors/scores obtained from PCA
+F.matrix.PCA <- dataPredictors.PCA$scores[,1:3]
+Project.Data.PCA.Eigen.Factors <- cbind(F.matrix[,1:3], F.matrix.PCA)
+colnames(Project.Data.PCA.Eigen.Factors) <- c('F.1', 'F.2', 'F.3', 'F1.PCA', 'F2.PCA', 'F3.PCA')
+
+head(Project.Data.PCA.Eigen.Factors)
+# we see they are the same 
+
+# look at the relationships of factors and the column response. This looks at the correlation (r^2) of each column with the response column
+(rSqrCorrelations<-apply(dataPredictors.PCA$scores,2,cor,house.data$Price)^2)
+
+sum(rSqrCorrelations)
+# this is the same r^2 as in the summary of the linear model
+
+# fit a linear model with the PCA factors as predictors
+linModPCA <- lm(Output ~ ., data =dataRotated)
+summary(linModPCA)
+
+# calculate relative importance measures for the PCA factors
+suppressMessages(library(relaimpo))
+metrics.data.pca <- calc.relimp(linModPCA, type = c("first", "last"))
+metrics.data.pca
+
+# sum the variances explained by each component to get the total variance explained by the model
+sum(metrics.data.pca@first)
+
+metrics.data.pca@first.rank
+
+# re-order the components from high importance to low importance
+orderComponents <- order(metrics.data.pca@first.rank)
+
+# fit the sequence of linear models
+dataRotatedReordered<-dataRotated[,c(1,orderComponents+1)]
+(nestedRSquared<-sapply(2:11,function(z) summary(lm(Output~.,data=dataRotatedReordered[,1:z]))$r.squared))
+
+# plot the r^2 values
+matplot(nestedRSquared,type="b",xlab="Number of Variables",ylab="R.Squared",lty=1,lwd=2,pch=16)
+legend("bottomright",legend="nestedRSquared",lty=1,lwd=1,col="black")
+```
+
+
+References: Yuri Balasanov's Lecture Notes for MSCA 31007 University of Chicago (2014)

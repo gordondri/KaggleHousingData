@@ -7,3 +7,5 @@
 
 2. Analysis of the dataset was performed in R which included retrieving data from the MySQL database into R, performing Principle Component Analysis 
 and Multiple Linear Regression to predict the house selling prices 
+
+3. Visualization of house selling prices using latitudes and longitudes in Tableau (heat map was created)
